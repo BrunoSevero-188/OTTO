@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>OTTO</title>
+<link rel="stylesheet" href="otto.css">
+</head>
+<body>
+
+<!-- TELA 1: BOOT -->
+<div id="boot-screen">
+  <div class="boot-title">OTTO</div>
+  <div class="boot-rule"></div>
+  <div class="boot-sync mono">SINCRONIZANDO DADOS...</div>
+  <div class="boot-ver mono">v5.0 · REBUILD</div>
+</div>
+
+<!-- TELA 2: ATIVAÇÃO -->
+<div id="activation-screen">
+  <div class="act-title">OTTO</div>
+  <button id="activate-btn">► ATIVAR SISTEMA</button>
+  <div class="act-hint mono">CLIQUE PARA INICIAR</div>
+</div>
+
+<!-- APP -->
+<div id="app">
+  <div id="topbar">
+    <div class="brand mono">OTTO</div>
+    <input id="apikey" type="password" placeholder="Cole sua Anthropic API key (sk-ant-...)">
+    <button id="savekey">SALVAR</button>
+    <span id="hud-badge" class="action-badge" style="display:none" title="E-mails aguardando ação"></span>
+    <button id="settings-btn" class="brain-btn" title="Configurações">⚙</button>
+  </div>
+
+  <div id="main">
+    <div id="orb-zone">
+      <div id="orb-wrap">
+        <div class="orb-ring r1"></div>
+        <div class="orb-ring r2"></div>
+        <div id="orb"></div>
+      </div>
+      <div id="assistant-name" class="mono">OTTO</div>
+      <div id="status-line" class="mono">OCIOSO</div>
+    </div>
+
+    <div id="dialog">
+      <div id="user-line"></div>
+      <div id="assistant-line"></div>
+    </div>
+
+    <div id="controls">
+      <button id="mic-btn" class="icon-btn" title="Microfone">🎙</button>
+      <input id="text-input" type="text" placeholder="ou digite e tecle Enter">
+      <button id="stop-btn" class="icon-btn" title="Interromper fala">⏹</button>
+    </div>
+
+    <div id="panel-area">
+      <div id="tabbar">
+        <button class="tab-btn active" data-tab="brain">🧠 <span class="tab-label">CÉREBRO</span></button>
+        <button class="tab-btn" data-tab="agenda">🗓️ <span class="tab-label">AGENDA</span></button>
+        <button class="tab-btn" data-tab="emails">📧 <span class="tab-label">E-MAILS</span><span id="tab-badge" class="action-badge" style="display:none"></span></button>
+        <button class="tab-btn" data-tab="news">📰 <span class="tab-label">NOTÍCIAS</span></button>
+        <button class="tab-btn" data-tab="digest">☀️ <span class="tab-label">DIGEST</span></button>
+      </div>
+
+      <div id="panel-brain" class="active">
+        <div id="brain-header">
+          <div class="title">🧠 SECOND BRAIN</div>
+          <div class="sub">contexto vivo injetado em cada comando</div>
+          <div id="brain-count" class="mono"></div>
+          <button id="add-note-btn" class="brain-btn" title="Nova nota">+</button>
+          <button id="reload-btn" class="brain-btn" title="Recarregar">⟳</button>
+        </div>
+        <div id="graph-container"></div>
+        <div id="legend"></div>
+      </div>
+
+      <div id="panel-agenda" class="tab-panel">
+        <div class="panel-header">
+          <div class="title">🗓️ AGENDA</div>
+          <div class="sub">hoje + próximos 7 dias</div>
+          <button id="agenda-refresh" class="brain-btn" title="Atualizar">⟳</button>
+        </div>
+        <div id="agenda-body" class="panel-body"></div>
+      </div>
+
+      <div id="panel-emails" class="tab-panel">
+        <div class="panel-header">
+          <div class="title">📧 E-MAILS</div>
+          <div id="emails-sub" class="sub"></div>
+          <button id="emails-refresh" class="brain-btn" title="Atualizar">⟳</button>
+        </div>
+        <div id="emails-body" class="panel-body"></div>
+      </div>
+
+      <div id="panel-news" class="tab-panel">
+        <div class="panel-header">
+          <div class="title">📰 NOTÍCIAS</div>
+          <div class="sub">radar dos seus assuntos</div>
+          <button id="news-refresh" class="brain-btn" title="Atualizar">⟳</button>
+        </div>
+        <div id="news-body" class="panel-body"></div>
+      </div>
+
+      <div id="panel-digest" class="tab-panel">
+        <div class="panel-header">
+          <div class="title">☀️ DIGEST</div>
+          <div class="sub">seu briefing da manhã</div>
+          <button id="digest-btn" class="brain-btn" title="Gerar agora">▶</button>
+        </div>
+        <div id="digest-body" class="panel-body">
+          <div class="empty-hint">Diga <code>"bom dia"</code> pro Otto, ou clique em ▶ pra gerar seu briefing agora.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL NOTA -->
+<div id="modal-overlay">
+  <div id="modal">
+    <h3 class="mono">EDITAR NOTA</h3>
+    <input type="hidden" id="note-id">
+    <label>Título</label>
+    <input type="text" id="note-title">
+    <label>Área</label>
+    <select id="note-area">
+      <option value="metas">Metas</option>
+      <option value="trabalho">Carreira</option>
+      <option value="projetos">Projetos</option>
+      <option value="financas">Finanças</option>
+      <option value="aprendizado">Aprendizado</option>
+      <option value="saude">Saúde</option>
+      <option value="relacoes">Relações</option>
+      <option value="meta">Núcleo</option>
+    </select>
+    <label>Conteúdo</label>
+    <textarea id="note-body"></textarea>
+    <div id="modal-actions">
+      <button id="modal-cancel">Cancelar</button>
+      <button id="modal-delete">Excluir</button>
+      <button id="modal-save">Salvar</button>
+    </div>
+  </div>
+</div>
+
+<div id="error-toast"></div>
+
+<!-- MODAL CONFIGURAÇÕES -->
+<div id="settings-overlay">
+  <div id="settings-modal">
+    <div id="settings-tabbar">
+      <button class="stab active" data-stab="agenda">Agenda</button>
+      <button class="stab" data-stab="emails">E-mails</button>
+      <button class="stab" data-stab="motor">Motor</button>
+    </div>
+    <div id="settings-body">
+
+      <div id="stab-agenda" class="stab-panel active">
+        <div class="settings-hint">
+          <strong>Como pegar o link:</strong> Google Agenda no computador → ⚙ Configurações → clique na agenda na lista à esquerda → "Integrar agenda" → copie o "Endereço secreto em formato iCal".
+        </div>
+        <div class="settings-warn">Este link dá acesso de leitura à sua agenda. Ele fica salvo só no seu navegador e nunca é enviado para a IA.</div>
+        <div id="calendars-list"></div>
+        <button id="add-calendar-btn" class="entry-add">+ adicionar agenda</button>
+      </div>
+
+      <div id="stab-emails" class="stab-panel">
+        <div class="settings-hint">
+          <strong>Passo a passo:</strong><br>
+          1) Ative a verificação em 2 etapas em myaccount.google.com/security<br>
+          2) Depois vá em myaccount.google.com/apppasswords, crie um app chamado "Otto" e copie a senha de 16 letras<br>
+          3) Cole essa senha de 16 letras aqui (NÃO é sua senha normal do Gmail)
+        </div>
+        <div class="settings-warn">Sua senha de app fica salva só no seu navegador e viaja apenas até a antena local e o seu provedor. Para a triagem, remetente/assunto/trecho vão até a API da Anthropic. Otto só LÊ: nunca envia, responde, apaga ou marca nada.</div>
+        <div id="emails-list"></div>
+        <button id="add-email-btn" class="entry-add">+ adicionar conta</button>
+      </div>
+
+      <div id="stab-motor" class="stab-panel">
+        <label style="font-size:11px;color:var(--text-dim);display:block;margin-bottom:8px;">NÍVEL DE CÉREBRO</label>
+        <div class="model-option" data-model="claude-haiku-4-5">
+          <div><div class="mo-name">ECONÔMICO</div><div class="mo-desc">claude-haiku-4-5 · rápido e barato</div></div>
+        </div>
+        <div class="model-option" data-model="claude-sonnet-5">
+          <div><div class="mo-name">EQUILIBRADO</div><div class="mo-desc">claude-sonnet-5 · meio-termo ideal</div></div>
+        </div>
+        <div class="model-option" data-model="claude-opus-4-8">
+          <div><div class="mo-name">MÁXIMO</div><div class="mo-desc">claude-opus-4-8 · o mais inteligente</div></div>
+        </div>
+        <div class="toggle-row">
+          <span>MODO ECONOMIA</span>
+          <input type="checkbox" id="economy-toggle" checked>
+        </div>
+        <div class="settings-hint" style="margin-top:6px;">Com o modo economia ligado: agenda, notícias e comandos comuns não gastam token; e-mails são triados uma vez só (cache); o digest faz 1 chamada por dia.</div>
+      </div>
+
+    </div>
+    <div id="settings-actions">
+      <button id="settings-close">Fechar</button>
+      <button id="settings-save">Salvar</button>
+    </div>
+  </div>
+</div>
+
+<script src="otto.js"></script>
+</body>
+</html>
