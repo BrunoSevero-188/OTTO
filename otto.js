@@ -23,28 +23,7 @@ const AREA = {
   meta:        { label: "Núcleo",      color: "#8a90a6" }
 };
 
-const DEFAULT_NOTES = [
-  { id:"voce", area:"meta", title:"Bruno",
-    body:"Bruno Severo de Oliveira, 21 anos. Apaixonado por arte (qualquer forma) e programação." },
-  { id:"metas-longo", area:"metas", title:"Formação",
-    body:"Meta de longo prazo (1-3 anos): se formar nesses conhecimentos (arte e programação) e ajudar qualquer pessoa que precisar de ajuda relacionada." },
-  { id:"carreira", area:"trabalho", title:"Estágio",
-    body:"Buscando vaga de estágio na área do curso. No momento está desempregado, mas mantém projetos próprios de e-commerce e afiliados em paralelo." },
-  { id:"proj-achadinho", area:"projetos", title:"Top Achadinho BR",
-    body:"Site de promoções brasileiro, convertido de Next.js para HTML/CSS/JS puro, com API Flask servindo os produtos." },
-  { id:"proj-scraper", area:"projetos", title:"Scraper",
-    body:"Ferramenta de web scraping com Selenium, BeautifulSoup e Flask, mirando Mercado Livre e Shopee, com identidade visual de 'recibo de garimpo'." },
-  { id:"proj-gestorx", area:"projetos", title:"GestorX",
-    body:"Sistema de gestão (GestorXpress) in Next.js/TypeScript, com fluxo de criação de conta em duas etapas (Administrador e Funcionário)." },
-  { id:"proj-scanner", area:"projetos", title:"Scanner",
-    body:"Ferramenta web de escaneamento de arquivos, backend em Python puro e frontend HTML/CSS/JS, estética de scanner/blueprint." },
-  { id:"financas", area:"financas", title:"Planejamento",
-    body:"Ainda sem metas financeiras definidas em valores — foco em consolidar projetos e renda antes de definir números." },
-  { id:"aprendizado", area:"aprendizado", title:"Estudos",
-    body:"Estudando programação front-end e back-end, além de inglês, espanhol, francês e italiano." },
-  { id:"saude", area:"saude", title:"Rotina",
-    body:"Treino, sono e alimentação dentro da média, sem condições específicas registradas." }
-];
+const DEFAULT_NOTES=[];
 
 const DEFAULT_REL = [
   ["metas-longo","voce"],
@@ -65,7 +44,7 @@ const DEFAULT_REL = [
 const ANTENNA_BASE = "http://127.0.0.1:4242";
 
 const MODEL_MAP = {
-  economico: "claude-haiku-4-5",
+  economico: "claude-haiku-4-5-20251001",
   equilibrado: "claude-sonnet-5",
   maximo: "claude-opus-4-8"
 };
@@ -88,7 +67,7 @@ const EMAIL_REFRESH_MS = 15 * 60 * 1000;
 const EMAILS_PER_ACCOUNT = 20;
 
 const DIGEST_CONFIG = {
-  city: "Naviraí, MS",
+  city: "Cidade não definida",
   weather: true,
   size: "curto",   // curto ~30s / medio ~1min
   speak: true
