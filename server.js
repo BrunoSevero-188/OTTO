@@ -3,461 +3,359 @@
 const http = require("http");
 const https = require("https");
 const tls = require("tls");
-const { URL } = require("url");
 
-const PORT = 4242;
 const HOST = "127.0.0.1";
-
-// 👈 EDITE AQUI: domínios liberados no /proxy e servidores IMAP liberados
-const PROXY_ALLOWLIST = ["calendar.google.com", "news.google.com"];
-const IMAP_ALLOWLIST = ["imap.gmail.com"];
-
-// 👈 EDITE AQUI: limites de segurança/economia
-const MAX_EMAILS = 50;            // teto de e-mails por pedido, mesmo que o front peça mais
-const IMAP_TIMEOUT_MS = 20000;    // desiste de uma conexão IMAP parada depois de 20 s
-const IMAP_BODY_BYTES = 6000;     // quantos bytes do corpo buscar (o trecho final tem no máx. 500 caracteres)
-const SNIPPET_CHARS = 500;        // tamanho máximo do trecho devolvido por e-mail
-
-const CORS_HEADERS = {
+const PORT = 4242;
+const PROXY_ALLOWLIST = new Set(["calendar.google.com", "news.google.com"]);
+const IMAP_ALLOWLIST = new Set(["imap.gmail.com"]);
+const MAX_EMAILS = 50;
+const MAX_BODY_BYTES = 1_000_000;
+const MAX_IMAP_BODY_BYTES = 6000;
+const CORS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type"
+  "Access-Control-Allow-Headers": "Content-Type",
+  "Access-Control-Max-Age": "600"
 };
 
-function log(...args) {
-  console.log("[ANTENA]", ...args);
+function json(res, status, payload) {
+  res.writeHead(status, Object.assign({ "Content-Type": "application/json; charset=utf-8" }, CORS));
+  res.end(JSON.stringify(payload));
 }
-
-// nunca loga credenciais — mascara e-mail e nunca imprime senha/links secretos
-function maskEmail(email) {
-  if (!email) return "(vazio)";
-  const [user, domain] = String(email).split("@");
-  if (!domain) return "***";
-  return (user.slice(0, 2) || "*") + "***@" + domain;
+function maskEmail(value) {
+  const s = String(value || "");
+  const parts = s.split("@");
+  return parts.length === 2 ? parts[0].slice(0, 2) + "***@" + parts[1] : "(conta)";
 }
-
-/* ============================================================
-   FETCH HTTP/HTTPS COM REDIRECTS (usado pelo /proxy)
-   ============================================================ */
-function fetchUrl(targetUrl, redirectsLeft) {
+function safeLog(message) {
+  console.log("[ANTENA] " + message);
+}
+function fetchAllowed(target, redirectsLeft) {
   if (redirectsLeft === undefined) redirectsLeft = 3;
   return new Promise((resolve, reject) => {
     let parsed;
-    try {
-      parsed = new URL(targetUrl);
-    } catch (e) {
-      return reject(new Error("URL inválida"));
+    try { parsed = new URL(target); } catch (_) { reject(new Error("URL inválida")); return; }
+    if (!["http:", "https:"].includes(parsed.protocol) || parsed.username || parsed.password || !PROXY_ALLOWLIST.has(parsed.hostname.toLowerCase())) {
+      reject(new Error("domínio não permitido"));
+      return;
     }
-    const lib = parsed.protocol === "http:" ? http : https;
-    const req = lib.request(
-      parsed,
-      {
-        method: "GET",
-        headers: {
-          "User-Agent":
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-          Accept: "*/*"
-        }
-      },
-      (res) => {
-        if (
-          [301, 302, 303, 307, 308].includes(res.statusCode) &&
-          res.headers.location &&
-          redirectsLeft > 0
-        ) {
-          const nextUrl = new URL(res.headers.location, parsed).toString();
-          res.resume();
-          return resolve(fetchUrl(nextUrl, redirectsLeft - 1));
-        }
-        const chunks = [];
-        res.on("data", (c) => chunks.push(c));
-        res.on("end", () => {
-          resolve({
-            statusCode: res.statusCode,
-            contentType: res.headers["content-type"] || "text/plain; charset=utf-8",
-            body: Buffer.concat(chunks)
-          });
-        });
+    const lib = parsed.protocol === "https:" ? https : http;
+    const req = lib.request(parsed, {
+      method: "GET",
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "*/*"
       }
-    );
+    }, res => {
+      const code = res.statusCode || 502;
+      if ([301, 302, 303, 307, 308].includes(code) && res.headers.location) {
+        const next = new URL(res.headers.location, parsed);
+        res.resume();
+        if (redirectsLeft <= 0) { reject(new Error("limite de redirecionamentos excedido")); return; }
+        if (!PROXY_ALLOWLIST.has(next.hostname.toLowerCase())) { reject(new Error("redirecionamento para domínio não permitido")); return; }
+        fetchAllowed(next.toString(), redirectsLeft - 1).then(resolve, reject);
+        return;
+      }
+      const chunks = [];
+      let bytes = 0;
+      res.on("data", chunk => {
+        bytes += chunk.length;
+        if (bytes > 8_000_000) {
+          req.destroy(new Error("resposta remota muito grande"));
+          return;
+        }
+        chunks.push(chunk);
+      });
+      res.on("end", () => resolve({
+        status: code,
+        type: res.headers["content-type"] || "application/octet-stream",
+        body: Buffer.concat(chunks)
+      }));
+    });
+    req.setTimeout(20000, () => req.destroy(new Error("tempo esgotado ao consultar a fonte")));
     req.on("error", reject);
-    req.setTimeout(15000, () => req.destroy(new Error("tempo esgotado")));
     req.end();
   });
 }
 
-/* ============================================================
-   CLIENTE IMAP MÍNIMO (module nativo tls, porta 993)
-   Suporta: LOGIN, EXAMINE (somente leitura), FETCH com BODY.PEEK
-   (nunca marca e-mail como lido), decodificação MIME básica.
-   ============================================================ */
-function escapeImapString(s) {
-  return String(s || "").replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+function decodeBytes(buffer, charset) {
+  const name = String(charset || "utf-8").toLowerCase();
+  try { return new TextDecoder(/utf-?8|us-ascii/.test(name) ? "utf-8" : "windows-1252").decode(buffer); }
+  catch (_) { return buffer.toString("utf8"); }
 }
-
-// Converte bytes em texto respeitando o charset (UTF-8 é o padrão; latin1 cobre iso-8859-1/windows-1252)
-function decodeBytes(buf, charset) {
-  const cs = String(charset || "utf-8").toLowerCase();
-  return buf.toString(/utf-?8|us-ascii/.test(cs) ? "utf8" : "latin1");
-}
-
-// Quoted-printable: junta os bytes (=C3=A7) e só então decodifica — senão "ç" vira "Ã§"
-function decodeQuotedPrintable(str, charset) {
-  const clean = String(str || "").replace(/=\r?\n/g, "");
+function decodeQuotedPrintable(value, charset) {
+  const input = String(value || "").replace(/=\r?\n/g, "");
   const bytes = [];
-  for (let i = 0; i < clean.length; i++) {
-    const hex = clean.substr(i + 1, 2);
-    if (clean[i] === "=" && /^[0-9A-Fa-f]{2}$/.test(hex)) {
-      bytes.push(parseInt(hex, 16));
+  for (let i = 0; i < input.length; i++) {
+    if (input[i] === "=" && /^[0-9a-f]{2}$/i.test(input.slice(i + 1, i + 3))) {
+      bytes.push(parseInt(input.slice(i + 1, i + 3), 16));
       i += 2;
     } else {
-      Buffer.from(clean[i], "utf8").forEach((b) => bytes.push(b));
+      bytes.push(...Buffer.from(input[i], "utf8"));
     }
   }
   return decodeBytes(Buffer.from(bytes), charset);
 }
-
-// Cabeçalhos codificados: =?UTF-8?B?...?= e =?UTF-8?Q?...?=
-function decodeMimeWord(str) {
-  if (!str) return "";
-  // palavras codificadas vizinhas ficam coladas (o espaço entre elas não conta)
-  const joined = str.replace(/(\?=)\s+(?==\?)/g, "$1");
-  return joined.replace(/=\?([^?]+)\?([BQ])\?([^?]*)\?=/gi, (m, charset, enc, data) => {
+function decodeMimeWord(value) {
+  if (!value) return "";
+  const joined = String(value).replace(/(\?=)\s+(?==\?)/g, "$1");
+  return joined.replace(/=\?([^?]+)\?([BQ])\?([^?]*)\?=/gi, (whole, charset, enc, data) => {
     try {
-      if (enc.toUpperCase() === "B") {
-        return decodeBytes(Buffer.from(data, "base64"), charset);
-      }
-      return decodeQuotedPrintable(data.replace(/_/g, " "), charset);
-    } catch (e) {
-      return m;
-    }
+      return enc.toUpperCase() === "B"
+        ? decodeBytes(Buffer.from(data, "base64"), charset)
+        : decodeQuotedPrintable(data.replace(/_/g, " "), charset);
+    } catch (_) { return whole; }
   });
 }
-
-function stripHtml(text) {
-  return text
-    .replace(/<style[\s\S]*?(<\/style>|$)/gi, "")   // também remove <style> cortado no meio
-    .replace(/<script[\s\S]*?(<\/script>|$)/gi, "")
-    .replace(/<head[\s\S]*?(<\/head>|$)/gi, "")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">");
+function htmlToText(value) {
+  return String(value || "").replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<head[\s\S]*?<\/head>/gi, " ")
+    .replace(/<[^>]+>/g, " ").replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&").replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">").replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'").replace(/\s+/g, " ").trim();
 }
-
-function extractPlainText(rawBody) {
-  if (!rawBody) return "";
-  let text = rawBody;
-  const ctMatch = rawBody.match(/Content-Type:\s*multipart\/[^;]+;\s*boundary="?([^"\r\n;]+)"?/i);
-  if (ctMatch) {
-    const boundary = ctMatch[1];
-    const parts = rawBody.split("--" + boundary);
-    let plainPart = parts.find((p) => /Content-Type:\s*text\/plain/i.test(p));
-    if (!plainPart) plainPart = parts.find((p) => /Content-Type:\s*text\/html/i.test(p));
-    if (plainPart) {
-      const encMatch = plainPart.match(/Content-Transfer-Encoding:\s*([^\r\n]+)/i);
-      const enc = encMatch ? encMatch[1].trim().toLowerCase() : "7bit";
-      const csMatch = plainPart.match(/charset="?([^"\s;]+)/i);
-      const charset = csMatch ? csMatch[1] : "utf-8";
-      const idx = plainPart.indexOf("\r\n\r\n");
-      let body = idx !== -1 ? plainPart.slice(idx + 4) : plainPart;
-      if (enc === "quoted-printable") body = decodeQuotedPrintable(body, charset);
-      else if (enc === "base64") {
-        try {
-          body = decodeBytes(Buffer.from(body.replace(/\s/g, ""), "base64"), charset);
-        } catch (e) {}
-      }
-      text = body;
-    }
-  } else {
-    text = decodeQuotedPrintable(rawBody, "utf-8");
+function parseHeaders(raw) {
+  const rows = String(raw || "").replace(/\r\n/g, "\n").split("\n");
+  const unfolded = [];
+  for (const row of rows) {
+    if (/^[ \t]/.test(row) && unfolded.length) unfolded[unfolded.length - 1] += " " + row.trim();
+    else if (row.trim()) unfolded.push(row);
   }
-  if (/<[a-z][\s\S]*>/i.test(text)) text = stripHtml(text);
-  return text.replace(/\s+/g, " ").trim().slice(0, SNIPPET_CHARS);
-}
-
-function parseHeaders(headerText) {
-  const lines = headerText
-    .replace(/\r\n/g, "\n")
-    .split("\n")
-    .reduce((acc, line) => {
-      if (/^[ \t]/.test(line) && acc.length) acc[acc.length - 1] += " " + line.trim();
-      else if (line.trim()) acc.push(line);
-      return acc;
-    }, []);
-  const headers = {};
-  lines.forEach((line) => {
-    const idx = line.indexOf(":");
-    if (idx === -1) return;
-    headers[line.slice(0, idx).trim().toLowerCase()] = line.slice(idx + 1).trim();
-  });
-  return headers;
-}
-
-function parseFetchLines(lines) {
-  const messages = [];
-  lines.forEach((entry) => {
-    const { text, literals } = entry;
-    if (!/FETCH \(/.test(text)) return;
-    const uidMatch = text.match(/UID (\d+)/);
-    const flagsMatch = text.match(/FLAGS \(([^)]*)\)/);
-    const uid = uidMatch ? uidMatch[1] : String(Date.now()) + Math.random();
-    const seen = flagsMatch ? /\\Seen/.test(flagsMatch[1]) : false;
-    const headerBuf = literals[0];
-    const bodyBuf = literals[1];
-    const headerText = headerBuf ? headerBuf.toString("utf8") : "";
-    const bodyTextRaw = bodyBuf ? bodyBuf.toString("utf8") : "";
-    const headers = parseHeaders(headerText);
-    messages.push({
-      id: headers["message-id"] || "uid-" + uid,
-      remetente: decodeMimeWord(headers["from"] || ""),
-      assunto: decodeMimeWord(headers["subject"] || "(sem assunto)"),
-      data: headers["date"] ? safeDateISO(headers["date"]) : new Date().toISOString(),
-      trecho: extractPlainText(bodyTextRaw),
-      lido: seen
-    });
-  });
-  return messages;
-}
-
-function safeDateISO(dateStr) {
-  const d = new Date(dateStr);
-  return isNaN(d) ? new Date().toISOString() : d.toISOString();
-}
-
-function fetchEmailsForAccount(host, usuario, senhaApp, quantidade) {
-  return new Promise((resolve, reject) => {
-    if (!IMAP_ALLOWLIST.includes(host)) return reject(new Error("host IMAP não permitido"));
-
-    const socket = tls.connect(993, host, {}, () => {});
-    let buffer = Buffer.alloc(0);
-    let literalRemaining = 0;
-    let lineParts = [];
-    let tagCounter = 0;
-    let pending = {};
-    let totalExists = 0;
-    let settled = false;
-
-    // se o servidor travar, não deixa o pedido pendurado pra sempre
-    socket.setTimeout(IMAP_TIMEOUT_MS, () => finish(new Error("tempo esgotado na conexão IMAP")));
-
-    function nextTag() {
-      tagCounter++;
-      return "A" + tagCounter;
-    }
-    function sendCmd(cmd) {
-      return new Promise((res, rej) => {
-        const tag = nextTag();
-        pending[tag] = { resolve: res, reject: rej, lines: [] };
-        socket.write(tag + " " + cmd + "\r\n");
-      });
-    }
-    function finish(err, result) {
-      if (settled) return;
-      settled = true;
-      try {
-        socket.end();
-      } catch (e) {}
-      if (err) reject(err);
-      else resolve(result);
-    }
-
-    let activatedTimer = null;
-
-function handleSpeechInput(rawText){
-  const norm = normalize(rawText);
-  if(!activated){
-    const hit = CONFIG.wakeWords.find(w => norm.includes(w));
-    if(hit){
-      activated = true;
-      const rest = norm.replace(hit,"").trim();
-      const originalRest = stripLeadWord(rawText, hit);
-      if(rest.length > 2){
-        processCommand(originalRest || rawText);
-      }else if(hit.startsWith("bom dia")){
-        activated = false;
-        processCommand("bom dia");                  // "bom dia otto" dispara o Morning Digest
-      }else if(hit.startsWith("boa tarde") || hit.startsWith("boa noite")){
-        activated = false;
-        speak(`${hit.startsWith("boa tarde") ? "Boa tarde" : "Boa noite"}, ${CONFIG.address}.`, () => {});
-      }else{
-        speak(`Pois não, ${CONFIG.address}.`, () => {});
-      }
-      clearTimeout(activatedTimer);
-      activatedTimer = setTimeout(() => { activated = false; }, 15000);
-    }
-    return;
+  const result = {};
+  for (const row of unfolded) {
+    const colon = row.indexOf(":");
+    if (colon > 0) result[row.slice(0, colon).trim().toLowerCase()] = row.slice(colon + 1).trim();
   }
-  processCommand(rawText);
-  activated = false;
+  return result;
+}
+function extractSnippet(rawBuffer, headerBuffer) {
+  if (!rawBuffer || !rawBuffer.length) return "";
+  const raw = (headerBuffer ? headerBuffer.toString("latin1") + "\r\n\r\n" : "") + rawBuffer.toString("latin1");
+  const boundaryMatch = raw.match(/boundary="?([^";\r\n]+)"?/i);
+  let part = raw;
+  if (boundaryMatch) {
+    const parts = raw.split("--" + boundaryMatch[1]);
+    part = parts.find(item => /Content-Type:\s*text\/plain/i.test(item)) ||
+      parts.find(item => /Content-Type:\s*text\/html/i.test(item)) || raw;
+  }
+  const headersEnd = part.search(/\r?\n\r?\n/);
+  const head = headersEnd >= 0 ? part.slice(0, headersEnd) : "";
+  let body = headersEnd >= 0 ? part.slice(headersEnd).replace(/^\r?\n\r?\n/, "") : part;
+  const encoding = (head.match(/Content-Transfer-Encoding:\s*([^\r\n]+)/i) || [,""])[1].trim().toLowerCase();
+  const charset = (head.match(/charset="?([^";\s]+)/i) || [,"utf-8"])[1];
+  let decoded;
+  if (encoding === "base64") decoded = decodeBytes(Buffer.from(body.replace(/\s/g, ""), "base64"), charset);
+  else if (encoding === "quoted-printable") decoded = decodeQuotedPrintable(body, charset);
+  else decoded = decodeBytes(Buffer.from(body, "latin1"), charset);
+  return htmlToText(decoded).slice(0, 500);
 }
 
-    socket.on("data", (chunk) => {
-      buffer = Buffer.concat([buffer, chunk]);
-      for (;;) {
-        if (literalRemaining > 0) {
-          if (buffer.length < literalRemaining) break;
-          lineParts.push({ type: "literal", buf: buffer.slice(0, literalRemaining) });
-          buffer = buffer.slice(literalRemaining);
-          literalRemaining = 0;
-          continue;
-        }
-        const idx = buffer.indexOf(Buffer.from("\r\n"));
-        if (idx === -1) break;
-        const lineBuf = buffer.slice(0, idx);
-        buffer = buffer.slice(idx + 2);
-        lineParts.push({ type: "text", buf: lineBuf });
-        const lineStr = lineBuf.toString("utf8");
-        const litMatch = lineStr.match(/\{(\d+)\+?\}\s*$/);
-        if (litMatch) {
-          literalRemaining = parseInt(litMatch[1], 10);
-          continue;
-        }
-        handleLogicalLine(lineParts);
-        lineParts = [];
+class ImapReader {
+  constructor(socket) {
+    this.socket = socket;
+    this.buffer = Buffer.alloc(0);
+    this.waiters = [];
+    this.failure = null;
+    socket.on("data", chunk => { this.buffer = Buffer.concat([this.buffer, chunk]); this.pump(); });
+    socket.on("error", error => { this.failure = error; this.pump(); });
+    socket.on("close", () => { if (!this.failure) this.failure = new Error("conexão IMAP encerrada"); this.pump(); });
+  }
+  pump() {
+    while (this.waiters.length) {
+      const waiter = this.waiters[0];
+      if (this.failure) {
+        this.waiters.shift();
+        waiter.reject(this.failure);
+        continue;
       }
-    });
-
-    socket.on("error", (err) => finish(err));
-    socket.on("close", () => {
-      if (!settled) finish(new Error("conexão IMAP encerrada inesperadamente"));
-    });
-
-    setTimeout(async () => {
-      try {
-        await sendCmd(`LOGIN "${escapeImapString(usuario)}" "${escapeImapString(senhaApp)}"`);
-        await sendCmd("EXAMINE INBOX"); // somente leitura — nunca marca como lido
-        const total = totalExists;
-        if (!total) return finish(null, []);
-        // quantidade sempre entre 1 e MAX_EMAILS (e nunca maior que a caixa)
-        const pedido = parseInt(quantidade, 10) || 20;
-        const n = Math.min(Math.max(1, pedido), MAX_EMAILS, total);
-        const start = Math.max(1, total - n + 1);
-        const lines = await sendCmd(
-          `FETCH ${start}:${total} (UID FLAGS BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE MESSAGE-ID)] BODY.PEEK[TEXT]<0.${IMAP_BODY_BYTES}>)`
-        );
-        const messages = parseFetchLines(lines).reverse(); // mais recentes primeiro
-        finish(null, messages);
-      } catch (err) {
-        finish(err);
+      if (waiter.kind === "line") {
+        const index = this.buffer.indexOf("\r\n");
+        if (index < 0) return;
+        const line = this.buffer.slice(0, index).toString("latin1");
+        this.buffer = this.buffer.slice(index + 2);
+        this.waiters.shift();
+        waiter.resolve(line);
+      } else {
+        if (this.buffer.length < waiter.count) return;
+        const value = this.buffer.slice(0, waiter.count);
+        this.buffer = this.buffer.slice(waiter.count);
+        this.waiters.shift();
+        waiter.resolve(value);
       }
-    }, 350); // pequena espera pro greeting do servidor chegar antes do LOGIN
-  });
+    }
+  }
+  line() { return new Promise((resolve, reject) => { this.waiters.push({ kind: "line", resolve, reject }); this.pump(); }); }
+  bytes(count) { return new Promise((resolve, reject) => { this.waiters.push({ kind: "bytes", count, resolve, reject }); this.pump(); }); }
+  async command(tag, command) {
+    this.socket.write(tag + " " + command + "\r\n");
+    const lines = [];
+    const fetches = [];
+    let active = null;
+    for (;;) {
+      const line = await this.line();
+      if (!line && !active) continue;
+      if (/^\* \d+ FETCH \(/i.test(line)) {
+        active = { text: line, literals: [] };
+      } else if (active) {
+        active.text += " " + line;
+      } else {
+        lines.push(line);
+      }
+      const literal = line.match(/\{(\d+)\+?\}\s*$/);
+      if (literal) {
+        const bytes = Number(literal[1]);
+        if (bytes > 2_000_000) throw new Error("resposta IMAP grande demais");
+        if (active) active.literals.push(await this.bytes(bytes));
+        else await this.bytes(bytes);
+        continue;
+      }
+      if (active && /\)\s*$/.test(line)) {
+        fetches.push(active);
+        active = null;
+      }
+      const status = line.match(new RegExp("^" + tag + " (OK|NO|BAD)\\b", "i"));
+      if (status) {
+        if (status[1].toUpperCase() !== "OK") {
+          const detail = line.replace(new RegExp("^" + tag + " \\S+\\s*", "i"), "");
+          throw new Error(status[1].toUpperCase() === "NO" ? "IMAP_LOGIN_RECUSADO: " + detail : "Comando IMAP recusado: " + detail);
+        }
+        return { lines, fetches };
+      }
+    }
+  }
 }
-
-/* ============================================================
-   SERVIDOR HTTP
-   ============================================================ */
-const server = http.createServer((req, res) => {
-  let parsedUrl;
+function quoteImap(value) {
+  const clean = String(value || "").replace(/[\r\n\0]/g, "");
+  return '"' + clean.replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
+}
+async function fetchEmails(payload) {
+  const host = String(payload.host || "").toLowerCase();
+  if (!IMAP_ALLOWLIST.has(host)) {
+    const error = new Error("host IMAP não permitido");
+    error.status = 403;
+    throw error;
+  }
+  const email = String(payload.usuario || "").trim();
+  const appPassword = String(payload.senhaApp || "").replace(/\s/g, "");
+  if (!email || !appPassword) {
+    const error = new Error("Informe o endereço de e-mail e a senha de app.");
+    error.status = 400;
+    throw error;
+  }
+  const quantity = Math.max(1, Math.min(MAX_EMAILS, Number.parseInt(payload.quantidade, 10) || 20));
+  const socket = tls.connect({ host, port: 993, servername: host });
+  socket.setTimeout(25000, () => socket.destroy(new Error("tempo esgotado na conexão IMAP")));
+  const reader = new ImapReader(socket);
+  let tag = 0;
+  const run = async command => {
+    tag += 1;
+    return reader.command("A" + tag, command);
+  };
   try {
-    parsedUrl = new URL(req.url, `http://${HOST}:${PORT}`);
-  } catch (e) {
-    res.writeHead(400, CORS_HEADERS);
-    return res.end("URL inválida");
+    const greeting = await reader.line();
+    if (!/^\* OK\b/i.test(greeting)) throw new Error("servidor IMAP não aceitou a conexão");
+    await run("LOGIN " + quoteImap(email) + " " + quoteImap(appPassword));
+    const mailbox = await run("EXAMINE INBOX");
+    const exists = mailbox.lines.map(line => line.match(/^\* (\d+) EXISTS/i)).find(Boolean);
+    const total = exists ? Number(exists[1]) : 0;
+    if (!total) return [];
+    const count = Math.min(quantity, total);
+    const start = total - count + 1;
+    const result = await run("FETCH " + start + ":" + total + " (UID FLAGS BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE MESSAGE-ID CONTENT-TYPE CONTENT-TRANSFER-ENCODING)] BODY.PEEK[TEXT]<0." + MAX_IMAP_BODY_BYTES + ">)");
+    return result.fetches.reverse().map((entry, index) => {
+      const headers = parseHeaders(entry.literals[0] ? entry.literals[0].toString("latin1") : "");
+      const flags = (entry.text.match(/FLAGS \(([^)]*)\)/i) || [,""])[1];
+      const uid = (entry.text.match(/\bUID (\d+)/i) || [,""])[1];
+      return {
+        id: headers["message-id"] || (uid ? "uid-" + uid : "mail-" + index),
+        conta: String(payload.apelido || payload.email || email),
+        remetente: decodeMimeWord(headers.from || ""),
+        assunto: decodeMimeWord(headers.subject || "(sem assunto)"),
+        data: headers.date && Number.isFinite(Date.parse(headers.date)) ? new Date(headers.date).toISOString() : new Date().toISOString(),
+        trecho: extractSnippet(entry.literals[1], entry.literals[0]),
+        lido: /\\Seen/.test(flags)
+      };
+    });
+  } catch (error) {
+    socket.destroy();
+    if (error.message.startsWith("IMAP_LOGIN_RECUSADO")) throw new Error("Senha de app inválida ou verificação em 2 etapas desativada — refaça em myaccount.google.com/apppasswords");
+    throw error;
+  } finally {
+    if (!socket.destroyed) socket.end();
   }
-
-  if (req.method === "OPTIONS") {
-    res.writeHead(204, CORS_HEADERS);
-    return res.end();
-  }
-
-  // ---- GET /proxy?url=... ----
-  if (req.method === "GET" && parsedUrl.pathname === "/proxy") {
-    const target = parsedUrl.searchParams.get("url");
-    if (!target) {
-      res.writeHead(400, CORS_HEADERS);
-      return res.end("faltou o parâmetro url");
-    }
-    let targetHost;
-    try {
-      targetHost = new URL(target).hostname;
-    } catch (e) {
-      res.writeHead(400, CORS_HEADERS);
-      return res.end("url inválida");
-    }
-    if (!PROXY_ALLOWLIST.includes(targetHost)) {
-      log("bloqueado (fora da allowlist):", targetHost);
-      res.writeHead(403, CORS_HEADERS);
-      return res.end("domínio não permitido");
-    }
-    log("proxy ->", targetHost);
-    fetchUrl(target)
-      .then((result) => {
-        res.writeHead(result.statusCode || 200, Object.assign({ "Content-Type": result.contentType }, CORS_HEADERS));
-        res.end(result.body);
-      })
-      .catch((err) => {
-        log("erro no proxy:", err.message);
-        res.writeHead(502, CORS_HEADERS);
-        res.end("falha ao buscar: " + err.message);
-      });
-    return;
-  }
-
-  // ---- POST /emails ----
-  if (req.method === "POST" && parsedUrl.pathname === "/emails") {
-    let body = "";
-    let tooBig = false;
-    req.on("data", (chunk) => {
-      body += chunk;
-      if (body.length > 2_000_000) {
-        tooBig = true;
+}
+function readJson(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let length = 0;
+    req.on("data", chunk => {
+      length += chunk.length;
+      if (length > MAX_BODY_BYTES) {
+        reject(Object.assign(new Error("requisição muito grande"), { status: 413 }));
         req.destroy();
+        return;
       }
+      chunks.push(chunk);
     });
-    req.on("end", async () => {
-      if (tooBig) return;
-      let payload;
-      try {
-        payload = JSON.parse(body);
-      } catch (e) {
-        res.writeHead(400, Object.assign({ "Content-Type": "application/json" }, CORS_HEADERS));
-        return res.end(JSON.stringify({ erro: "JSON inválido" }));
-      }
-      const { host, usuario, senhaApp, quantidade } = payload || {};
-      log("pedido de e-mails:", maskEmail(usuario), "via", host, "· senha: ••••••••");
+    req.on("end", () => {
+      try { resolve(JSON.parse(Buffer.concat(chunks).toString("utf8"))); }
+      catch (_) { reject(Object.assign(new Error("JSON inválido"), { status: 400 })); }
+    });
+    req.on("error", reject);
+  });
+}
 
-      if (!host || !IMAP_ALLOWLIST.includes(host)) {
-        res.writeHead(403, Object.assign({ "Content-Type": "application/json" }, CORS_HEADERS));
-        return res.end(JSON.stringify({ erro: "host IMAP não permitido" }));
-      }
-      if (!usuario || !senhaApp) {
-        res.writeHead(400, Object.assign({ "Content-Type": "application/json" }, CORS_HEADERS));
-        return res.end(JSON.stringify({ erro: "usuário ou senha de app ausentes" }));
-      }
-      try {
-        const emails = await fetchEmailsForAccount(host, usuario, senhaApp, quantidade || 20);
-        res.writeHead(200, Object.assign({ "Content-Type": "application/json" }, CORS_HEADERS));
-        res.end(JSON.stringify({ emails }));
-      } catch (err) {
-        log("erro IMAP:", err.message);
-        // só culpa a senha quando o servidor realmente recusou o login; falha de rede tem mensagem própria
-        const recusado = /Comando IMAP recusado/.test(err.message);
-        const msg = recusado
-          ? "Senha de app inválida ou verificação em 2 etapas desativada — refaça em myaccount.google.com/apppasswords"
-          : "Não consegui falar com o servidor de e-mail agora (" + err.message + "). Verifique a internet e tente de novo.";
-        res.writeHead(502, Object.assign({ "Content-Type": "application/json" }, CORS_HEADERS));
-        res.end(JSON.stringify({ erro: msg }));
-      }
-    });
+const server = http.createServer(async (req, res) => {
+  let address;
+  try { address = new URL(req.url, "http://" + HOST + ":" + PORT); }
+  catch (_) { res.writeHead(400, CORS); res.end("URL inválida"); return; }
+  if (req.method === "OPTIONS") { res.writeHead(204, CORS); res.end(); return; }
+  if (req.method === "GET" && address.pathname === "/health") {
+    res.writeHead(200, Object.assign({ "Content-Type": "application/json" }, CORS));
+    res.end(JSON.stringify({ online: true }));
     return;
   }
-
-  res.writeHead(404, CORS_HEADERS);
+  if (req.method === "GET" && address.pathname === "/proxy") {
+    const target = address.searchParams.get("url");
+    if (!target) { res.writeHead(400, CORS); res.end("faltou o parâmetro url"); return; }
+    try {
+      const result = await fetchAllowed(target, 3);
+      res.writeHead(result.status, Object.assign({ "Content-Type": result.type }, CORS));
+      res.end(result.body);
+    } catch (error) {
+      const forbidden = /não permitido/.test(error.message);
+      res.writeHead(forbidden ? 403 : 502, CORS);
+      res.end(forbidden ? "domínio não permitido" : "falha ao consultar a fonte permitida");
+    }
+    return;
+  }
+  if (req.method === "POST" && address.pathname === "/emails") {
+    try {
+      const payload = await readJson(req);
+      const email = String(payload.usuario || "");
+      safeLog("busca IMAP para " + maskEmail(email) + " via " + String(payload.host || ""));
+      const emails = await fetchEmails(payload);
+      json(res, 200, { emails });
+    } catch (error) {
+      const status = error.status || (/senha de app inválida/i.test(error.message) ? 401 : 502);
+      json(res, status, { erro: error.message || "não consegui consultar esta conta" });
+    }
+    return;
+  }
+  res.writeHead(404, CORS);
   res.end("não encontrado");
 });
 
-server.on("error", (err) => {
-  if (err.code === "EADDRINUSE") {
-    console.error(`⚠ A porta ${PORT} já está em uso, senhor. Feche o outro programa usando essa porta e tente de novo.`);
-    process.exit(1);
+server.on("error", error => {
+  if (error.code === "EADDRINUSE") {
+    console.error("⚠ A porta 4242 já está em uso. Feche o programa que usa essa porta e tente novamente.");
+    process.exitCode = 1;
   } else {
-    console.error("Erro na antena:", err.message);
+    console.error("Erro na antena: " + error.message);
   }
 });
-
 server.listen(PORT, HOST, () => {
-  console.log(`⚡ ANTENA DO OTTO ONLINE — porta ${PORT}. Pode abrir o otto.html.`);
+  console.log("⚡ ANTENA DO OTTO ONLINE — porta 4242. Pode abrir o otto.html.");
 });
