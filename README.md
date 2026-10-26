@@ -33,4 +33,4 @@ Diga **“Olá OTTO”**, aguarde a resposta e então fale um comando:
 - “Bom dia”
 - “Atualizar e-mails” / “Atualizar notícias”
 
-O painel **DIGEST** também tem um botão para gerar o briefing. O digest usa Naviraí, MS para a previsão do tempo e fala em volume médio por padrão.
+O painel **DIGEST** também tem um botão para gerar o briefing. A previsão do tempo usa a cidade configurada no OTTO; a fala usa volume médio por padrão.
