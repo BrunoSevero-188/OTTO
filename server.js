@@ -1,11 +1,3 @@
-#!/usr/bin/env node
-/*
- * ANTENA DO OTTO
- * Node puro (http, https, tls) — zero dependências, zero npm install.
- * Escuta SOMENTE em 127.0.0.1. Existe pra dar CORS a três coisas:
- *   GET  /proxy?url=...   -> agenda (iCal do Google Calendar) e notícias (RSS do Google News)
- *   POST /emails          -> caixa de entrada via IMAP (leitura, com senha de app)
- */
 "use strict";
 
 const http = require("http");
@@ -16,8 +8,15 @@ const { URL } = require("url");
 const PORT = 4242;
 const HOST = "127.0.0.1";
 
+// 👈 EDITE AQUI: domínios liberados no /proxy e servidores IMAP liberados
 const PROXY_ALLOWLIST = ["calendar.google.com", "news.google.com"];
 const IMAP_ALLOWLIST = ["imap.gmail.com"];
+
+// 👈 EDITE AQUI: limites de segurança/economia
+const MAX_EMAILS = 50;            // teto de e-mails por pedido, mesmo que o front peça mais
+const IMAP_TIMEOUT_MS = 20000;    // desiste de uma conexão IMAP parada depois de 20 s
+const IMAP_BODY_BYTES = 6000;     // quantos bytes do corpo buscar (o trecho final tem no máx. 500 caracteres)
+const SNIPPET_CHARS = 500;        // tamanho máximo do trecho devolvido por e-mail
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -96,25 +95,55 @@ function escapeImapString(s) {
   return String(s || "").replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
-function decodeQuotedPrintable(str) {
-  return str
-    .replace(/=\r?\n/g, "")
-    .replace(/=([0-9A-Fa-f]{2})/g, (m, hex) => String.fromCharCode(parseInt(hex, 16)));
+// Converte bytes em texto respeitando o charset (UTF-8 é o padrão; latin1 cobre iso-8859-1/windows-1252)
+function decodeBytes(buf, charset) {
+  const cs = String(charset || "utf-8").toLowerCase();
+  return buf.toString(/utf-?8|us-ascii/.test(cs) ? "utf8" : "latin1");
 }
 
+// Quoted-printable: junta os bytes (=C3=A7) e só então decodifica — senão "ç" vira "Ã§"
+function decodeQuotedPrintable(str, charset) {
+  const clean = String(str || "").replace(/=\r?\n/g, "");
+  const bytes = [];
+  for (let i = 0; i < clean.length; i++) {
+    const hex = clean.substr(i + 1, 2);
+    if (clean[i] === "=" && /^[0-9A-Fa-f]{2}$/.test(hex)) {
+      bytes.push(parseInt(hex, 16));
+      i += 2;
+    } else {
+      Buffer.from(clean[i], "utf8").forEach((b) => bytes.push(b));
+    }
+  }
+  return decodeBytes(Buffer.from(bytes), charset);
+}
+
+// Cabeçalhos codificados: =?UTF-8?B?...?= e =?UTF-8?Q?...?=
 function decodeMimeWord(str) {
   if (!str) return "";
-  return str.replace(/=\?([^?]+)\?([BQ])\?([^?]*)\?=/gi, (m, charset, enc, data) => {
+  // palavras codificadas vizinhas ficam coladas (o espaço entre elas não conta)
+  const joined = str.replace(/(\?=)\s+(?==\?)/g, "$1");
+  return joined.replace(/=\?([^?]+)\?([BQ])\?([^?]*)\?=/gi, (m, charset, enc, data) => {
     try {
       if (enc.toUpperCase() === "B") {
-        return Buffer.from(data, "base64").toString(/utf-?8/i.test(charset) ? "utf8" : "latin1");
+        return decodeBytes(Buffer.from(data, "base64"), charset);
       }
-      const s = data.replace(/_/g, " ").replace(/=([0-9A-Fa-f]{2})/g, (m2, hex) => String.fromCharCode(parseInt(hex, 16)));
-      return s;
+      return decodeQuotedPrintable(data.replace(/_/g, " "), charset);
     } catch (e) {
       return m;
     }
   });
+}
+
+function stripHtml(text) {
+  return text
+    .replace(/<style[\s\S]*?(<\/style>|$)/gi, "")   // também remove <style> cortado no meio
+    .replace(/<script[\s\S]*?(<\/script>|$)/gi, "")
+    .replace(/<head[\s\S]*?(<\/head>|$)/gi, "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">");
 }
 
 function extractPlainText(rawBody) {
@@ -129,30 +158,23 @@ function extractPlainText(rawBody) {
     if (plainPart) {
       const encMatch = plainPart.match(/Content-Transfer-Encoding:\s*([^\r\n]+)/i);
       const enc = encMatch ? encMatch[1].trim().toLowerCase() : "7bit";
+      const csMatch = plainPart.match(/charset="?([^"\s;]+)/i);
+      const charset = csMatch ? csMatch[1] : "utf-8";
       const idx = plainPart.indexOf("\r\n\r\n");
       let body = idx !== -1 ? plainPart.slice(idx + 4) : plainPart;
-      if (enc === "quoted-printable") body = decodeQuotedPrintable(body);
+      if (enc === "quoted-printable") body = decodeQuotedPrintable(body, charset);
       else if (enc === "base64") {
         try {
-          body = Buffer.from(body.replace(/\s/g, ""), "base64").toString("utf8");
+          body = decodeBytes(Buffer.from(body.replace(/\s/g, ""), "base64"), charset);
         } catch (e) {}
       }
       text = body;
     }
   } else {
-    text = decodeQuotedPrintable(rawBody);
+    text = decodeQuotedPrintable(rawBody, "utf-8");
   }
-  if (/<[a-z][\s\S]*>/i.test(text)) {
-    text = text
-      .replace(/<style[\s\S]*?<\/style>/gi, "")
-      .replace(/<script[\s\S]*?<\/script>/gi, "")
-      .replace(/<[^>]+>/g, " ")
-      .replace(/&nbsp;/g, " ")
-      .replace(/&amp;/g, "&")
-      .replace(/&lt;/g, "<")
-      .replace(/&gt;/g, ">");
-  }
-  return text.replace(/\s+/g, " ").trim().slice(0, 500);
+  if (/<[a-z][\s\S]*>/i.test(text)) text = stripHtml(text);
+  return text.replace(/\s+/g, " ").trim().slice(0, SNIPPET_CHARS);
 }
 
 function parseHeaders(headerText) {
@@ -217,6 +239,9 @@ function fetchEmailsForAccount(host, usuario, senhaApp, quantidade) {
     let totalExists = 0;
     let settled = false;
 
+    // se o servidor travar, não deixa o pedido pendurado pra sempre
+    socket.setTimeout(IMAP_TIMEOUT_MS, () => finish(new Error("tempo esgotado na conexão IMAP")));
+
     function nextTag() {
       tagCounter++;
       return "A" + tagCounter;
@@ -238,32 +263,35 @@ function fetchEmailsForAccount(host, usuario, senhaApp, quantidade) {
       else resolve(result);
     }
 
-    function handleLogicalLine(parts) {
-      let literals = [];
-      let text = "";
-      parts.forEach((p) => {
-        if (p.type === "literal") literals.push(p.buf);
-        else text += p.buf.toString("utf8");
-      });
+    let activatedTimer = null;
 
-      const existsMatch = text.match(/^\*\s+(\d+)\s+EXISTS/);
-      if (existsMatch) totalExists = parseInt(existsMatch[1], 10);
-
-      const tagMatch = text.match(/^(A\d+)\s+(OK|NO|BAD)/);
-      if (tagMatch) {
-        const tag = tagMatch[1],
-          status = tagMatch[2];
-        const p = pending[tag];
-        if (p) {
-          delete pending[tag];
-          if (status === "OK") p.resolve(p.lines);
-          else p.reject(new Error("Comando IMAP recusado: " + text.trim()));
-        }
-        return;
+function handleSpeechInput(rawText){
+  const norm = normalize(rawText);
+  if(!activated){
+    const hit = CONFIG.wakeWords.find(w => norm.includes(w));
+    if(hit){
+      activated = true;
+      const rest = norm.replace(hit,"").trim();
+      const originalRest = stripLeadWord(rawText, hit);
+      if(rest.length > 2){
+        processCommand(originalRest || rawText);
+      }else if(hit.startsWith("bom dia")){
+        activated = false;
+        processCommand("bom dia");                  // "bom dia otto" dispara o Morning Digest
+      }else if(hit.startsWith("boa tarde") || hit.startsWith("boa noite")){
+        activated = false;
+        speak(`${hit.startsWith("boa tarde") ? "Boa tarde" : "Boa noite"}, ${CONFIG.address}.`, () => {});
+      }else{
+        speak(`Pois não, ${CONFIG.address}.`, () => {});
       }
-      const openTags = Object.keys(pending);
-      if (openTags.length) pending[openTags[0]].lines.push({ text, literals });
+      clearTimeout(activatedTimer);
+      activatedTimer = setTimeout(() => { activated = false; }, 15000);
     }
+    return;
+  }
+  processCommand(rawText);
+  activated = false;
+}
 
     socket.on("data", (chunk) => {
       buffer = Buffer.concat([buffer, chunk]);
@@ -302,10 +330,12 @@ function fetchEmailsForAccount(host, usuario, senhaApp, quantidade) {
         await sendCmd("EXAMINE INBOX"); // somente leitura — nunca marca como lido
         const total = totalExists;
         if (!total) return finish(null, []);
-        const n = Math.min(quantidade || 20, total);
+        // quantidade sempre entre 1 e MAX_EMAILS (e nunca maior que a caixa)
+        const pedido = parseInt(quantidade, 10) || 20;
+        const n = Math.min(Math.max(1, pedido), MAX_EMAILS, total);
         const start = Math.max(1, total - n + 1);
         const lines = await sendCmd(
-          `FETCH ${start}:${total} (UID FLAGS BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE MESSAGE-ID)] BODY.PEEK[TEXT]<0.2000>)`
+          `FETCH ${start}:${total} (UID FLAGS BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE MESSAGE-ID)] BODY.PEEK[TEXT]<0.${IMAP_BODY_BYTES}>)`
         );
         const messages = parseFetchLines(lines).reverse(); // mais recentes primeiro
         finish(null, messages);
@@ -403,13 +433,13 @@ const server = http.createServer((req, res) => {
         res.end(JSON.stringify({ emails }));
       } catch (err) {
         log("erro IMAP:", err.message);
+        // só culpa a senha quando o servidor realmente recusou o login; falha de rede tem mensagem própria
+        const recusado = /Comando IMAP recusado/.test(err.message);
+        const msg = recusado
+          ? "Senha de app inválida ou verificação em 2 etapas desativada — refaça em myaccount.google.com/apppasswords"
+          : "Não consegui falar com o servidor de e-mail agora (" + err.message + "). Verifique a internet e tente de novo.";
         res.writeHead(502, Object.assign({ "Content-Type": "application/json" }, CORS_HEADERS));
-        res.end(
-          JSON.stringify({
-            erro:
-              "Senha de app inválida ou verificação em 2 etapas desativada — refaça em myaccount.google.com/apppasswords"
-          })
-        );
+        res.end(JSON.stringify({ erro: msg }));
       }
     });
     return;
