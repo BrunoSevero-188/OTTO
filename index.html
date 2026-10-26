@@ -294,7 +294,7 @@ input::placeholder,textarea::placeholder{color:var(--txt3)!important}
   const ANTENNA_URL="http://127.0.0.1:4242";
   const moduleLoad=(key,fallback)=>{try{const value=localStorage.getItem(key);return value?JSON.parse(value):fallback;}catch(_){return fallback;}};
   const moduleSave=(key,value)=>{try{localStorage.setItem(key,JSON.stringify(value));return true;}catch(_){toast("Não foi possível salvar esta configuração no navegador.");return false;}};
-  const modulePrefs=Object.assign({agendaDays:7,timezone:Intl.DateTimeFormat().resolvedOptions().timeZone||"UTC",emailCount:20,emailInterval:15,newsTopics:["tecnologia","economia"],newsCount:5,newsInterval:30,digestCity:"Naviraí, MS",digestWeather:true,digestLength:"curto",digestSpeak:true,digestVolume:.5,digestAuto:true,digestVoice:true,digestClick:true},moduleLoad("jarvis_preferences",{}));
+  const modulePrefs=Object.assign({agendaDays:7,timezone:Intl.DateTimeFormat().resolvedOptions().timeZone||"UTC",emailCount:20,emailInterval:15,newsTopics:["tecnologia","economia"],newsCount:5,newsInterval:30,digestCity:"",digestWeather:true,digestLength:"curto",digestSpeak:true,digestVolume:.5,digestAuto:true,digestVoice:true,digestClick:true},moduleLoad("jarvis_preferences",{}));
   let CALENDARS=moduleLoad("jarvis_calendars",[{id:"cal-1",name:"Agenda 1",color:"#2dd4ff",ics:""},{id:"cal-2",name:"Agenda 2",color:"#8b5cf6",ics:""}]);
   let EMAIL_ACCOUNTS=moduleLoad("jarvis_emails",[{id:"mail-1",nickname:"Gmail",color:"#2dd4ff",host:"imap.gmail.com",email:"",appPassword:""}]);
   let EMAIL_TRIAGE=moduleLoad("jarvis_email_triage",{});
@@ -302,7 +302,7 @@ input::placeholder,textarea::placeholder{color:var(--txt3)!important}
   let ECONOMY_MODE=true;try{ECONOMY_MODE=localStorage.getItem("otto_economy")!=="false";}catch(_){}
   try{
     if(localStorage.getItem("jarvis_upgrade_seed_v1")!=="done"){
-      Object.assign(modulePrefs,{agendaDays:7,timezone:Intl.DateTimeFormat().resolvedOptions().timeZone||"UTC",emailCount:20,emailInterval:15,newsTopics:["tecnologia","economia"],newsCount:5,newsInterval:30,digestCity:"Naviraí, MS",digestWeather:true,digestLength:"curto",digestSpeak:true,digestVolume:.5,digestAuto:true,digestVoice:true,digestClick:true});
+      Object.assign(modulePrefs,{agendaDays:7,timezone:Intl.DateTimeFormat().resolvedOptions().timeZone||"UTC",emailCount:20,emailInterval:15,newsTopics:["tecnologia","economia"],newsCount:5,newsInterval:30,digestCity:"",digestWeather:true,digestLength:"curto",digestSpeak:true,digestVolume:.5,digestAuto:true,digestVoice:true,digestClick:true});
       CALENDARS=[{id:"cal-1",name:"Agenda 1",color:"#2dd4ff",ics:""},{id:"cal-2",name:"Agenda 2",color:"#8b5cf6",ics:""}];
       EMAIL_ACCOUNTS=[{id:"mail-1",nickname:"Gmail",color:"#2dd4ff",host:"imap.gmail.com",email:"",appPassword:""}];
       CONFIG.model="claude-haiku-4-5-20251001";ECONOMY_MODE=true;
@@ -446,7 +446,7 @@ input::placeholder,textarea::placeholder{color:var(--txt3)!important}
     modulePrefs.agendaDays=Math.max(0,Number($("agenda-days").value)||0);modulePrefs.timezone=$("agenda-timezone").value.trim()||Intl.DateTimeFormat().resolvedOptions().timeZone||"UTC";
     modulePrefs.emailCount=Math.max(1,Math.min(50,Number($("email-count").value)||20));modulePrefs.emailInterval=Math.max(1,Number($("email-interval").value)||15);
     modulePrefs.newsTopics=$("news-topics").value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean);modulePrefs.newsCount=Math.max(1,Math.min(15,Number($("news-count").value)||5));modulePrefs.newsInterval=Math.max(5,Number($("news-interval").value)||30);
-    modulePrefs.digestCity=$("digest-city").value.trim()||"Naviraí, MS";modulePrefs.digestLength=$("digest-length").value;
+    modulePrefs.digestCity=$("digest-city").value.trim()||"";modulePrefs.digestLength=$("digest-length").value;
     modulePrefs.digestWeather=$("digest-weather").checked;modulePrefs.digestSpeak=$("digest-speak").checked;modulePrefs.digestVolume=Number($("digest-volume").value)||0.5;
     modulePrefs.digestAuto=$("digest-auto").checked;modulePrefs.digestVoice=$("digest-voice").checked;modulePrefs.digestClick=$("digest-click").checked;
     CONFIG.model=$("model-select").value;ECONOMY_MODE=$("economy-mode").checked;
