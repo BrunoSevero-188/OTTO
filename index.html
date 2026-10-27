@@ -157,6 +157,28 @@ input::placeholder,textarea::placeholder{color:var(--txt3)!important}
 @media(max-width:390px){#app{padding-inline:10px}.brand{font-size:15px!important}.small-btn{padding:8px}.face-clock{font-size:24px}.face-state{font-size:17px}.face-orb-button{width:min(68vw,260px)}.face-panel{padding:var(--sp-12)}.face-bottom{flex-wrap:wrap;justify-content:center}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
 </style>
+<style id="agents-panel-styles">
+#module-agents .agents-layout{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(250px,.85fr);gap:16px;padding:16px}
+#module-agents .agents-orbit,#module-agents .agents-side{min-width:0;border:1px solid var(--line);border-radius:var(--radius-small,10px);background:var(--surface,rgba(10,24,44,.82))}
+#module-agents .agents-orbit{display:grid;grid-template-rows:auto auto;justify-items:center;align-content:center;gap:8px;min-height:300px;padding:20px}
+#module-agents .agents-orbit svg{width:min(100%,440px);height:auto;overflow:visible}
+#module-agents .agents-orbit .orbit-ring{fill:none;stroke:var(--muted);stroke-opacity:.2}
+#module-agents .agents-orbit .orbit-core{fill:var(--card,rgba(14,31,55,.78));stroke:var(--muted);stroke-opacity:.55}
+#module-agents .agents-orbit .orbit-title{fill:var(--text);font:700 16px ui-monospace,monospace;text-anchor:middle}
+#module-agents .agents-orbit .orbit-subtitle{fill:var(--muted);font:12px system-ui,sans-serif;text-anchor:middle}
+#module-agents .agents-empty{max-width:420px;text-align:center;color:var(--muted);font-size:12px;line-height:1.65}
+#module-agents .agents-empty strong{display:block;color:var(--text);font-size:14px;margin-bottom:6px}
+#module-agents .agents-side{padding:14px}
+#module-agents .agents-summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:12px 0}
+#module-agents .agents-stat{border:1px solid var(--line);border-radius:8px;padding:10px}
+#module-agents .agents-stat span{display:block;color:var(--muted);font-size:10px}
+#module-agents .agents-stat strong{display:block;font:700 18px ui-monospace,monospace;margin-top:4px}
+#module-agents .agents-source{color:var(--muted);font-size:11px;line-height:1.6}
+#module-agents .agents-source code{color:var(--cyan)}
+#module-agents .agents-list{list-style:none;margin:10px 0 0;padding:0}
+#module-agents .agents-list:empty{display:none}
+@media(max-width:700px){#module-agents .agents-layout{grid-template-columns:minmax(0,1fr);padding:12px}#module-agents .agents-orbit{min-height:220px;padding:12px}#module-agents .agents-orbit .orbit-title{font-size:20px}#module-agents .agents-orbit .orbit-subtitle{display:none}}
+</style>
 </head>
 <body>
 <section id="boot" aria-label="Inicialização do OTTO"><div class="boot-title">OTTO</div><div class="boot-rule"></div><div class="boot-sync">SINCRONIZANDO DADOS...</div><div class="boot-version">v5.0 · REBUILD</div></section>
@@ -168,13 +190,13 @@ input::placeholder,textarea::placeholder{color:var(--txt3)!important}
 <section id="controls"><button id="mic-btn" class="icon-btn" title="Ligar ou desligar o microfone" aria-label="Microfone">🎙</button><input id="text-input" type="text" placeholder="ou digite e tecle Enter" aria-label="Digite um comando"><button id="send-btn" class="icon-btn" title="Enviar comando" aria-label="Enviar">➤</button><button id="stop-btn" class="icon-btn" title="Interromper a fala" aria-label="Interromper fala">⏹</button></section>
 <section class="panel" aria-label="Second Brain"><header class="brain-header"><div class="brain-title">🧠 SECOND BRAIN</div><div class="brain-sub">contexto vivo conectado ao OTTO</div><div id="brain-count" class="brain-count"></div><button id="add-note-btn" class="brain-btn" title="Criar nota">+</button><button id="reload-btn" class="brain-btn" title="Recarregar notas">⟳</button></header><div id="graph-container" aria-label="Grafo de notas"></div><div id="legend" class="legend"></div></section>
 <section class="module-tabs" role="tablist" aria-label="Centrais do OTTO">
-<button class="module-tab active" data-module="agenda">🗓 AGENDA</button><button class="module-tab" data-module="emails">✉ E-MAILS <span id="email-badge" class="badge" hidden>0</span></button><button class="module-tab" data-module="news">▤ NOTÍCIAS</button><button class="module-tab" data-module="digest">☀ DIGEST</button>
+<button class="module-tab active" data-module="agenda">🗓 AGENDA</button><button class="module-tab" data-module="emails">✉ E-MAILS <span id="email-badge" class="badge" hidden>0</span></button><button class="module-tab" data-module="news">▤ NOTÍCIAS</button><button class="module-tab" data-module="digest">☀ DIGEST</button><button class="module-tab" data-module="agents" aria-controls="module-agents">✦ AGENTES</button>
 </section>
 <section id="module-agenda" class="module-panel active"><header class="module-head"><h2>🗓 CENTRAL DE AGENDA</h2><span class="hint">hoje + próximos 7 dias</span><span id="next-countdown" class="countdown"></span><button class="refresh-btn" id="agenda-refresh">↻ Atualizar</button></header><div class="module-body"><div id="agenda-status" class="module-status">As agendas serão carregadas quando você abrir este painel.</div><div id="agenda-content"></div></div></section>
 <section id="module-emails" class="module-panel"><header class="module-head"><h2>✉ CENTRAL DE E-MAILS</h2><span id="emails-status-inline" class="hint">triagem local/API</span><button class="refresh-btn" id="emails-refresh">↻ Atualizar</button></header><div class="module-body"><div id="emails-status" class="module-status">Configure uma conta no painel ⚙.</div><div id="emails-content"></div></div></section>
 <section id="module-news" class="module-panel"><header class="module-head"><h2>▤ RADAR DE NOTÍCIAS</h2><span class="hint">fontes gratuitas · Google News RSS</span><button class="refresh-btn" id="news-refresh">↻ Atualizar</button></header><div class="module-body"><div id="news-status" class="module-status">Tecnologia e economia · Brasil</div><div id="news-content"></div></div></section>
 <section id="module-digest" class="module-panel"><header class="module-head"><h2>☀ MORNING DIGEST</h2><span class="hint">agenda · ação · notícias · foco</span><button class="refresh-btn" id="digest-btn">▶ Gerar briefing</button></header><div class="module-body"><div id="digest-status" class="module-status">Diga “bom dia” ao OTTO ou gere seu briefing agora.</div><div id="digest-content" class="digest-text"></div></div></section>
-</main>
+<section id="module-agents" class="module-panel"><header class="module-head"><h2>✦ PAINEL DE AGENTES</h2><span id="agents-updated" class="hint">Aguardando leitura local</span><button class="refresh-btn" id="agents-refresh" type="button">↻ Atualizar</button></header><div class="agents-layout"><div class="agents-orbit"><svg viewBox="0 0 440 260" role="img" aria-labelledby="agents-svg-title agents-svg-desc"><title id="agents-svg-title">Constelação de agentes do OTTO</title><desc id="agents-svg-desc">Sem agentes autônomos registrados no servidor.</desc><circle class="orbit-ring" cx="220" cy="118" r="92"/><circle class="orbit-ring" cx="220" cy="118" r="67"/><polygon class="orbit-core" points="220,79 254,98 254,138 220,157 186,138 186,98"/><text class="orbit-title" x="220" y="116">OTTO</text><text class="orbit-subtitle" x="220" y="136">NÚCLEO LOCAL</text></svg><div class="agents-empty"><strong id="agents-empty-title">Nenhum agente autônomo confirmado</strong><span id="agents-empty-copy">Não há workers ou tarefas agendadas no servidor para representar. O painel não inventa sinais de atividade.</span></div></div><aside class="agents-side"><div id="agents-status" class="module-status" role="status" aria-live="polite">Consultando a antena local…</div><h3>RESUMO</h3><div class="agents-summary"><div class="agents-stat"><span>Total confirmado</span><strong id="agents-total">—</strong></div><div class="agents-stat"><span>Em dia</span><strong id="agents-ok">—</strong></div><div class="agents-stat"><span>Atenção</span><strong id="agents-attention">—</strong></div><div class="agents-stat"><span>Desligados</span><strong id="agents-off">—</strong></div></div><p class="agents-source">Fonte: <code>GET /api/agents</code> na antena local. Só leitura; sem chamadas de IA ou serviços externos.</p><ul id="agents-list" class="agents-list" aria-label="Agentes registrados"></ul></aside></div></section></main>
 <div id="settings-overlay" class="settings-overlay" role="dialog" aria-modal="true" aria-labelledby="settings-title"><div class="settings-modal"><h2 id="settings-title">⚙ CONFIGURAÇÕES DO OTTO</h2>
 <section class="settings-section"><h3>AGENDA</h3><p class="settings-help">Google Agenda no computador → ⚙ Configurações → escolha a agenda à esquerda → “Integrar agenda” → copie o “Endereço secreto em formato iCal”.</p><p class="settings-warning">Este link dá acesso de leitura à agenda. Ele fica salvo só no seu navegador e nunca é enviado para a IA.</p><div id="calendar-config-list"></div><button id="add-calendar" class="add-config">+ adicionar agenda</button><div class="settings-grid" style="margin-top:10px"><div class="settings-field"><label for="agenda-days">Janela da agenda</label><select id="agenda-days"><option value="0">Só hoje</option><option value="7">Hoje + próximos 7 dias</option></select></div><div class="settings-field"><label for="agenda-timezone">Fuso horário (IANA)</label><input id="agenda-timezone" placeholder="detectado pelo navegador"></div></div></section>
 <section class="settings-section"><h3>E-MAILS</h3><p class="settings-help">Gmail: ative a verificação em 2 etapas em myaccount.google.com/security; depois crie uma senha de app em myaccount.google.com/apppasswords e cole a senha exclusiva de 16 letras.</p><p class="settings-warning">Sua senha de app fica no navegador e é enviada apenas à antena local e ao provedor. Remetente, assunto e um trecho do e-mail podem ser enviados à Anthropic para triagem. O OTTO só lê: nunca envia, responde, apaga ou marca mensagens.</p><div id="email-config-list"></div><button id="add-email" class="add-config">+ adicionar conta</button><div class="settings-grid" style="margin-top:10px"><div class="settings-field"><label for="email-count">E-mails recentes por conta</label><input id="email-count" type="number" min="1" max="50"></div><div class="settings-field"><label for="email-interval">Atualização (minutos)</label><input id="email-interval" type="number" min="1" max="240"></div></div></section>
@@ -644,7 +666,40 @@ input::placeholder,textarea::placeholder{color:var(--txt3)!important}
   window.addEventListener("load",()=>{refreshAgenda();refreshNews(false);});
 })();
 </script>
-<div id="faceMode" data-s="idle" aria-hidden="true" role="dialog" aria-modal="true" aria-label="Cockpit FACE do OTTO">
+<script id="agents-panel-script">
+(() => {
+  "use strict";
+  const panel=document.getElementById("module-agents"),status=document.getElementById("agents-status");
+  if(!panel||!status)return;
+  const $=id=>document.getElementById(id);
+  let timer=0,requestInFlight=false;
+  function stopPolling(){if(timer){clearInterval(timer);timer=0;}}
+  function startPolling(){stopPolling();if(panel.classList.contains("active")&&document.visibilityState==="visible"){loadAgents();timer=setInterval(loadAgents,30000);}}
+  async function loadAgents(){
+    if(requestInFlight||!panel.classList.contains("active")||document.visibilityState!=="visible")return;
+    requestInFlight=true;status.classList.remove("error");status.textContent="Lendo inventário local…";
+    try{
+      const response=await fetch("http://127.0.0.1:4242/api/agents",{headers:{Accept:"application/json"},cache:"no-store"});
+      if(!response.ok)throw new Error("A antena respondeu HTTP "+response.status+".");
+      const data=await response.json();
+      if(!data||data.ok!==true||!Array.isArray(data.agents)||!data.resumo)throw new Error("A resposta da antena está incompleta.");
+      $("agents-total").textContent=String(data.resumo.total??data.agents.length);
+      $("agents-ok").textContent=String(data.resumo.ok??0);
+      $("agents-attention").textContent=String(data.resumo.atencao??0);
+      $("agents-off").textContent=String(data.resumo.off??0);
+      $("agents-updated").textContent="Atualizado "+new Intl.DateTimeFormat("pt-BR",{hour:"2-digit",minute:"2-digit",second:"2-digit"}).format(new Date(data.now));
+      $("agents-empty-title").textContent=data.agents.length?"Inventário recebido":"Nenhum agente autônomo confirmado";
+      $("agents-empty-copy").textContent=data.agents.length?"O inventário veio da antena local; os estados e ciclos são apresentados somente quando há dados reais.":"Não há workers ou tarefas agendadas no servidor para representar. O painel não inventa sinais de atividade.";
+      status.textContent=data.agents.length?"Inventário local carregado.":"Antena online; nenhum agente autônomo registrado.";
+    }catch(error){status.classList.add("error");status.textContent="Não foi possível ler o inventário: "+(error.message||"antena local indisponível");$("agents-updated").textContent="Sem atualização";}
+    finally{requestInFlight=false;}
+  }
+  document.querySelectorAll(".module-tab[data-module='agents']").forEach(button=>button.addEventListener("click",startPolling));
+  document.getElementById("agents-refresh").addEventListener("click",loadAgents);
+  document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="hidden")stopPolling();else if(panel.classList.contains("active"))startPolling();});
+  window.addEventListener("pagehide",stopPolling);
+})();
+</script><div id="faceMode" data-s="idle" aria-hidden="true" role="dialog" aria-modal="true" aria-label="Cockpit FACE do OTTO">
   <div class="face-frame">
     <i class="face-corner tl"></i><i class="face-corner tr"></i><i class="face-corner bl"></i><i class="face-corner br"></i>
     <header class="face-top">
