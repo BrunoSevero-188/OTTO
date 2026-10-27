@@ -31,6 +31,7 @@ jobs:
         run: |
           mkdir _site
           cp index.html _site/index.html
+          cp dashboard-tokens.html _site/dashboard-tokens.html
       - name: Enviar artefato
         uses: actions/upload-pages-artifact@v4
         with:
