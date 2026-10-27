@@ -317,6 +317,17 @@ const server = http.createServer(async (req, res) => {
     res.end(JSON.stringify({ online: true }));
     return;
   }
+  if (req.method === "GET" && address.pathname === "/api/agents") {
+    // O repositório não define workers/agentes autônomos nem um inventário com prova de vida.
+    // Rotinas de interface e polling do navegador não são reportadas como agentes do servidor.
+    json(res, 200, {
+      ok: true,
+      now: new Date().toISOString(),
+      agents: [],
+      resumo: { total: 0, ok: 0, atencao: 0, off: 0, pior: null }
+    });
+    return;
+  }
   if (req.method === "GET" && address.pathname === "/proxy") {
     const target = address.searchParams.get("url");
     if (!target) { res.writeHead(400, CORS); res.end("faltou o parâmetro url"); return; }
